@@ -32,25 +32,37 @@ def smtp_check(email):
 
 @app.route('/verify', methods=['POST'])
 def verify_emails():
-    file = request.files['file']
-    stream = io.StringIO(file.stream.read().decode("UTF8"), newline=None)
-    reader = csv.reader(stream)
-    results = []
+    try:
+        file = request.files.get('file')
+        if not file:
+            return jsonify({'error': 'No file uploaded'}), 400
 
-    for row in reader:
-        email = row[0]
-        if not is_valid_syntax(email):
-            status = 'Invalid Syntax'
-        elif not has_mx(email.split('@')[1]):
-            status = 'Invalid Domain'
-        elif not smtp_check(email):
-            status = 'SMTP Failed'
-        else:
-            status = 'Valid'
-        results.append({'email': email, 'status': status})
+        stream = io.StringIO(file.stream.read().decode("UTF8"), newline=None)
+        reader = csv.reader(stream)
+        results = []
 
-    return jsonify(results)
+        for row in reader:
+            if not row:
+                continue  # skip empty lines
+            email = row[0].strip()
+            if not email:
+                continue
+
+            if not is_valid_syntax(email):
+                status = 'Invalid Syntax'
+            elif not has_mx(email.split('@')[1]):
+                status = 'Invalid Domain'
+            elif not smtp_check(email):
+                status = 'SMTP Failed'
+            else:
+                status = 'Valid'
+
+            results.append({'email': email, 'status': status})
+
+        return jsonify(results), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
-
