@@ -1,8 +1,7 @@
 import os
-
 from flask import Flask, request, Response
 from flask_cors import CORS
-import re, dns.resolver, smtplib, csv, io, json, time, os
+import re, dns.resolver, smtplib, csv, io, json, time
 
 app = Flask(__name__)
 CORS(app)
@@ -31,6 +30,10 @@ def smtp_check(email):
     except:
         return False
 
+@app.route('/')
+def home():
+    return "✅ Email Verifier Backend is Running. Use POST /verify to check emails."
+
 @app.route('/verify', methods=['POST'])
 def verify_emails_stream():
     file = request.files['file']
@@ -50,10 +53,11 @@ def verify_emails_stream():
                 status = 'Valid'
             result = {'email': email, 'status': status}
             yield f"data: {json.dumps(result)}\n\n"
-            time.sleep(0.5)
+            time.sleep(0.5)  # Simulate progress
 
     return Response(generate(), mimetype='text/event-stream')
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
 
+    
