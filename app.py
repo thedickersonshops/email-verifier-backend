@@ -1,25 +1,34 @@
-import os, re, csv, io, json, time, smtplib, socket, dns.resolver, requests
+import os, re, csv, io, json, time, smtplib, socket, dns.resolver, requests, socks
 from flask import Flask, request, Response
 from flask_cors import CORS
 
 app = Flask(__name__)
 CORS(app)
 
-# 1. Syntax check
+# ---------[ Settings ]---------
+SOCKS_PROXY = os.getenv("SOCKS_PROXY")  # e.g., 127.0.0.1:9050
+KICKBOX_KEY = os.getenv("KICKBOX_KEY")
+VERIMAIL_KEY = os.getenv("VERIMAIL_KEY")
+MAILBOXLAYER_KEY = os.getenv("MAILBOXLAYER_KEY")
+
+# ---------[ Email Checks ]---------
 def is_valid_syntax(email):
     return re.match(r'^[\w\.-]+@[\w\.-]+\.\w+$', email)
 
-# 2. MX check
 def get_mx_records(domain):
     try:
         return dns.resolver.resolve(domain, 'MX')
     except:
         return None
 
-# 3. SMTP logic
-def smtp_check(email, mx_records):
+def smtp_check(email, mx_records, use_proxy=False):
     for mx in sorted(mx_records, key=lambda r: r.preference):
         try:
+            if use_proxy and SOCKS_PROXY:
+                proxy_host, proxy_port = SOCKS_PROXY.split(":")
+                socks.setdefaultproxy(socks.SOCKS5, proxy_host, int(proxy_port))
+                socks.wrapmodule(smtplib)
+
             server = smtplib.SMTP(timeout=10)
             server.connect(str(mx.exchange))
             server.helo('test.com')
@@ -37,41 +46,37 @@ def smtp_check(email, mx_records):
             continue
     return 'Unknown'
 
-# 4. Fallback API check if SMTP is not sure
 def fallback_api_check(email):
     # Kickbox
     try:
-        res = requests.get(f'https://api.kickbox.com/v2/verify?email={email}&apikey=live_1671f87353c542369ea0ff1f8370979d6dce0de0c279dd1b3e35969e22efbf3c').json()
-        if res.get("result") == "deliverable":
+        r = requests.get(f'https://api.kickbox.com/v2/verify?email={email}&apikey={KICKBOX_KEY}').json()
+        if r.get("result") == "deliverable":
             return "Valid (Kickbox)"
-        elif res.get("result") == "undeliverable":
+        elif r.get("result") == "undeliverable":
             return "Invalid (Kickbox)"
-    except:
-        pass
+    except: pass
 
     # Verimail
     try:
-        res = requests.get(f'https://verimail.io/api/v1/verify?email={email}&key=A602A4C42B364360B14E0A9321AA44BF').json()
-        if res.get("deliverable") is True:
+        r = requests.get(f'https://verimail.io/api/v1/verify?email={email}&key={VERIMAIL_KEY}').json()
+        if r.get("deliverable") is True:
             return "Valid (Verimail)"
-        elif res.get("deliverable") is False:
+        elif r.get("deliverable") is False:
             return "Invalid (Verimail)"
-    except:
-        pass
+    except: pass
 
     # MailboxLayer
     try:
-        res = requests.get(f'http://apilayer.net/api/check?access_key=44eaa3ddd12c471855eda9ccc6fc82d5&email={email}&smtp=1&format=1').json()
-        if res.get("smtp_check") and res.get("format_valid"):
+        r = requests.get(f'http://apilayer.net/api/check?access_key={MAILBOXLAYER_KEY}&email={email}&smtp=1&format=1').json()
+        if r.get("smtp_check") and r.get("format_valid"):
             return "Valid (MailboxLayer)"
-        elif not res.get("smtp_check"):
+        else:
             return "Invalid (MailboxLayer)"
-    except:
-        pass
+    except: pass
 
     return "Fallback Failed"
 
-# 5. Streaming endpoint
+# ---------[ API Endpoint ]---------
 @app.route('/verify', methods=['POST'])
 def verify_emails_stream():
     file = request.files['file']
@@ -81,7 +86,6 @@ def verify_emails_stream():
     def generate():
         for row in reader:
             email = row[0].strip()
-
             if not is_valid_syntax(email):
                 status = 'Invalid Syntax'
             else:
@@ -90,27 +94,20 @@ def verify_emails_stream():
                 if not mx_records:
                     status = 'Invalid Domain'
                 else:
-                    smtp_result = smtp_check(email, mx_records)
-                    if smtp_result == 'Valid':
-                        status = smtp_result
-                    else:
-                        api_result = fallback_api_check(email)
-                        if "Valid" in api_result:
-                            status = api_result
-                        elif "Invalid" in api_result:
-                            status = api_result
-                        else:
-                            status = smtp_result  # stick with original if API fails too
+                    status = smtp_check(email, mx_records, use_proxy=True)
+                    if status == "Unknown":
+                        status = fallback_api_check(email)
 
             result = {'email': email, 'status': status}
+            print(result)
             yield f"data: {json.dumps(result)}\n\n"
-            time.sleep(0.2)  # Optional throttle
+            time.sleep(0.2)
 
     return Response(generate(), mimetype='text/event-stream')
 
 @app.route('/')
 def home():
-    return '✅ Email Verifier API is Running!'
+    return '✅ Email Verifier API with SOCKS + Fallback is Running!'
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
