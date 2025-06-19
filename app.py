@@ -1,15 +1,17 @@
 import os
+import re
+import dns.resolver
+import smtplib
+import csv
+import io
+import json
+import time
+
 from flask import Flask, request, Response
 from flask_cors import CORS
-import re, dns.resolver, smtplib, csv, io, json, time
 
 app = Flask(__name__)
 CORS(app)
-
-# ✅ Homepage route (this was missing or not connected)
-@app.route("/", methods=["GET"])
-def home():
-    return "✅ Email Verifier Backend is Running. Use POST /verify to check emails."
 
 def is_valid_syntax(email):
     return re.match(r'^[\w\.-]+@[\w\.-]+\.\w+$', email)
@@ -35,6 +37,12 @@ def smtp_check(email):
     except:
         return False
 
+# ✅ HOMEPAGE ROUTE to avoid 404 on Railway
+@app.route("/", methods=["GET"])
+def home():
+    return "✅ Email Verifier Backend is Running. Use POST /verify to check emails."
+
+# ✅ MAIN EMAIL VERIFICATION STREAMING ROUTE
 @app.route('/verify', methods=['POST'])
 def verify_emails_stream():
     file = request.files['file']
@@ -54,7 +62,7 @@ def verify_emails_stream():
                 status = 'Valid'
             result = {'email': email, 'status': status}
             yield f"data: {json.dumps(result)}\n\n"
-            time.sleep(0.5)
+            time.sleep(0.5)  # Slow down to allow frontend log updates
 
     return Response(generate(), mimetype='text/event-stream')
 
