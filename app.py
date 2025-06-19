@@ -6,6 +6,11 @@ import re, dns.resolver, smtplib, csv, io, json, time
 app = Flask(__name__)
 CORS(app)
 
+# ✅ Homepage route (this was missing or not connected)
+@app.route("/", methods=["GET"])
+def home():
+    return "✅ Email Verifier Backend is Running. Use POST /verify to check emails."
+
 def is_valid_syntax(email):
     return re.match(r'^[\w\.-]+@[\w\.-]+\.\w+$', email)
 
@@ -30,10 +35,6 @@ def smtp_check(email):
     except:
         return False
 
-@app.route('/')
-def home():
-    return "✅ Email Verifier Backend is Running. Use POST /verify to check emails."
-
 @app.route('/verify', methods=['POST'])
 def verify_emails_stream():
     file = request.files['file']
@@ -53,11 +54,9 @@ def verify_emails_stream():
                 status = 'Valid'
             result = {'email': email, 'status': status}
             yield f"data: {json.dumps(result)}\n\n"
-            time.sleep(0.5)  # Simulate progress
+            time.sleep(0.5)
 
     return Response(generate(), mimetype='text/event-stream')
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
-
-    
