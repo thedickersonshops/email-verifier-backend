@@ -23,7 +23,6 @@ def get_mx_records(domain):
 def smtp_check(email, mx_records, proxy=None, proxy_user=None, proxy_pass=None):
     original_socket = socket.socket  # backup original socket
 
-    # Setup proxy if given
     if proxy:
         try:
             ip, port = proxy.split(":")
@@ -44,7 +43,7 @@ def smtp_check(email, mx_records, proxy=None, proxy_user=None, proxy_pass=None):
             server.mail('verify@test.com')
             code, _ = server.rcpt(email)
             server.quit()
-            socket.socket = original_socket  # Restore socket after use
+            socket.socket = original_socket
 
             if code == 250:
                 return 'Valid'
@@ -85,12 +84,12 @@ def fallback_api_check(email):
 
     return "Fallback Failed"
 
-# ---------[ Streaming Verification Route ]---------
+# ---------[ Email Verification Streaming ]---------
 @app.route('/verify', methods=['POST'])
 def verify_emails_stream():
     file = request.files['file']
     proxy = request.form.get('proxy')
-    proxy_user = request.form.get('proxyUser')  # match frontend keys!
+    proxy_user = request.form.get('proxyUser')
     proxy_pass = request.form.get('proxyPass')
 
     stream = io.StringIO(file.stream.read().decode("utf-8"), newline=None)
@@ -112,39 +111,39 @@ def verify_emails_stream():
                         status = fallback_api_check(email)
 
             result = {'email': email, 'status': status}
-            print(result)
             yield f"data: {json.dumps(result)}\n\n"
             time.sleep(0.2)
 
     return Response(generate(), mimetype='text/event-stream')
 
-# ---------[ Proxy Test Endpoint ]---------
+# ---------[ Test Proxy (with Authentication) ]---------
 @app.route('/test-proxy', methods=['POST'])
 def test_proxy():
     data = request.get_json()
-    proxy = data.get('proxy')
-    proxy_user = data.get('proxyUser')
-    proxy_pass = data.get('proxyPass')
+    proxy = data.get("proxy")
+    proxy_user = data.get("proxyUser")
+    proxy_pass = data.get("proxyPass")
 
     try:
-        ip, port = proxy.split(":")
-        port = int(port)
-        if proxy_user and proxy_pass:
-            socks.set_default_proxy(socks.SOCKS5, ip, port, True, proxy_user, proxy_pass)
-        else:
-            socks.set_default_proxy(socks.SOCKS5, ip, port)
+        if proxy:
+            ip, port = proxy.split(":")
+            port = int(port)
+            if proxy_user and proxy_pass:
+                socks.set_default_proxy(socks.SOCKS5, ip, port, True, proxy_user, proxy_pass)
+            else:
+                socks.set_default_proxy(socks.SOCKS5, ip, port)
+            socket.socket = socks.socksocket
 
-        socket.socket = socks.socksocket
-        test_sock = socket.create_connection(("smtp.gmail.com", 587), timeout=8)
-        test_sock.close()
+        test = smtplib.SMTP("smtp.gmail.com", 587, timeout=10)
+        test.quit()
         socket.socket = socket._socketobject if hasattr(socket, "_socketobject") else socket.socket
-        return jsonify({"status": "Proxy working ✅"})
+        return jsonify({"status": "✅ Proxy works!"})
     except Exception as e:
-        print("Proxy Test Failed:", e)
+        print("Proxy test error:", e)
         socket.socket = socket._socketobject if hasattr(socket, "_socketobject") else socket.socket
         return jsonify({"status": "Proxy connection failed"}), 400
 
-# ---------[ Homepage ]---------
+# ---------[ Basic Check ]---------
 @app.route('/')
 def home():
     return '✅ Email Verifier API with Auth-Proxies + Fallback APIs is Running!'
