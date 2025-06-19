@@ -14,24 +14,23 @@ from flask_cors import CORS
 app = Flask(__name__)
 CORS(app)
 
-# 1. Syntax validation
+# 1. Basic syntax validation
 def is_valid_syntax(email):
     return re.match(r'^[\w\.-]+@[\w\.-]+\.\w+$', email)
 
-# 2. MX record check
+# 2. MX lookup
 def get_mx_records(domain):
     try:
         return dns.resolver.resolve(domain, 'MX')
     except:
         return None
 
-# 3. SMTP check
+# 3. SMTP verification with timeout
 def smtp_check(email, mx_records):
     for mx in sorted(mx_records, key=lambda r: r.preference):
         try:
             mail_server = str(mx.exchange)
-            server = smtplib.SMTP(timeout=10)
-            server.connect(mail_server)
+            server = smtplib.SMTP(mail_server, 25, timeout=10)
             server.helo('test.com')
             server.mail('verify@test.com')
             code, _ = server.rcpt(email)
@@ -43,44 +42,42 @@ def smtp_check(email, mx_records):
                 return 'Invalid'
             else:
                 return 'Unknown'
-        except (smtplib.SMTPServerDisconnected, smtplib.SMTPConnectError, socket.timeout):
-            continue
-        except:
+        except (smtplib.SMTPServerDisconnected, smtplib.SMTPConnectError, socket.timeout, Exception):
             continue
     return 'Unknown'
 
-# 4. API fallback check (kickbox, verimail, mailboxlayer)
+# 4. Fallback API validation (if SMTP is inconclusive)
 def fallback_api_check(email):
-    # First: Kickbox
+    # ✅ Kickbox
     try:
-        res = requests.get(
+        r = requests.get(
             f'https://api.kickbox.com/v2/verify?email={email}&apikey=live_1671f87353c542369ea0ff1f8370979d6dce0de0c279dd1b3e35969e22efbf3c'
         ).json()
-        if res.get("result") == "deliverable":
-            return "Valid (Kickbox)"
-        elif res.get("result") == "undeliverable":
-            return "Invalid (Kickbox)"
+        if r.get('result') == 'deliverable':
+            return 'Valid (Kickbox)'
+        elif r.get('result') == 'undeliverable':
+            return 'Invalid (Kickbox)'
     except:
         pass
 
-    # Second: Verimail
+    # ✅ Verimail
     try:
-        res = requests.get(
+        r = requests.get(
             f'https://verimail.io/api/v1/verify?email={email}&key=A602A4C42B364360B14E0A9321AA44BF'
         ).json()
-        if res.get("deliverable") is True:
+        if r.get("deliverable") is True:
             return "Valid (Verimail)"
-        elif res.get("deliverable") is False:
+        elif r.get("deliverable") is False:
             return "Invalid (Verimail)"
     except:
         pass
 
-    # Third: MailboxLayer
+    # ✅ MailboxLayer
     try:
-        res = requests.get(
+        r = requests.get(
             f'http://apilayer.net/api/check?access_key=44eaa3ddd12c471855eda9ccc6fc82d5&email={email}&smtp=1&format=1'
         ).json()
-        if res.get("smtp_check") and res.get("format_valid"):
+        if r.get("smtp_check") and r.get("format_valid"):
             return "Valid (MailboxLayer)"
         else:
             return "Invalid (MailboxLayer)"
@@ -89,7 +86,7 @@ def fallback_api_check(email):
 
     return "Fallback Failed"
 
-# 5. Main Verification Endpoint (with streaming)
+# 5. Email Verification Streaming Endpoint
 @app.route('/verify', methods=['POST'])
 def verify_emails_stream():
     file = request.files['file']
@@ -108,19 +105,20 @@ def verify_emails_stream():
                     status = 'Invalid Domain'
                 else:
                     status = smtp_check(email, mx_records)
-                    if status == "Unknown":
+                    if status == 'Unknown':
                         status = fallback_api_check(email)
 
             result = {'email': email, 'status': status}
             yield f"data: {json.dumps(result)}\n\n"
-            time.sleep(0.2)
+            time.sleep(0.2)  # UI pacing
 
     return Response(generate(), mimetype='text/event-stream')
 
-# 6. Homepage for Railway
+# 6. Homepage check for Railway/Vercel
 @app.route('/')
 def home():
-    return '✅ Email Verifier API is Running!'
+    return '✅ Email Verifier Backend is Live!'
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
