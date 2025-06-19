@@ -1,3 +1,4 @@
+
 import os, re, csv, io, json, time, smtplib, socket, dns.resolver, requests, socks
 from flask import Flask, request, Response, jsonify
 from flask_cors import CORS
@@ -21,7 +22,7 @@ def get_mx_records(domain):
         return None
 
 def smtp_check(email, mx_records, proxy=None, proxy_user=None, proxy_pass=None):
-    original_socket = socket.socket  # backup original socket
+    original_socket = socket.socket  # backup
 
     if proxy:
         try:
@@ -33,7 +34,7 @@ def smtp_check(email, mx_records, proxy=None, proxy_user=None, proxy_pass=None):
                 socks.set_default_proxy(socks.SOCKS5, ip, port)
             socket.socket = socks.socksocket
         except Exception as e:
-            print("Proxy setup error:", e)
+            print("❌ Proxy setup error:", e)
 
     for mx in sorted(mx_records, key=lambda r: r.preference):
         try:
@@ -49,9 +50,8 @@ def smtp_check(email, mx_records, proxy=None, proxy_user=None, proxy_pass=None):
                 return 'Valid'
             elif code in (451, 452, 550, 551, 552, 553):
                 return 'Invalid'
-            else:
-                return 'Unknown'
-        except:
+        except Exception as e:
+            print("SMTP error:", e)
             continue
 
     socket.socket = original_socket
