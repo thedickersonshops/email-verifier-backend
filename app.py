@@ -1,152 +1,54 @@
-
-import os, re, csv, io, json, time, smtplib, socket, dns.resolver, requests, socks
-from flask import Flask, request, Response, jsonify
+import os, requests
+from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
+import random
 
 app = Flask(__name__)
 CORS(app)
 
-# ---------[ API Keys from Railway Env ]---------
-KICKBOX_KEY = os.getenv("KICKBOX_KEY")
-VERIMAIL_KEY = os.getenv("VERIMAIL_KEY")
-MAILBOXLAYER_KEY = os.getenv("MAILBOXLAYER_KEY")
+# List of backend servers
+BACKENDS = [
+    "http://127.0.0.1:10000",  # Railway itself
+    "http://ec2-44-201-247-203.compute-1.amazonaws.com:10000",  # AWS 1
+    "http://ec2-52-53-243-135.us-west-1.compute.amazonaws.com:10000"  # AWS 2
+]
 
-# ---------[ Email Checks ]---------
-def is_valid_syntax(email):
-    return re.match(r'^[\w\.-]+@[\w\.-]+\.\w+$', email)
-
-def get_mx_records(domain):
-    try:
-        return dns.resolver.resolve(domain, 'MX')
-    except:
-        return None
-
-def smtp_check(email, mx_records, proxy=None, proxy_user=None, proxy_pass=None):
-    original_socket = socket.socket  # backup
-
-    if proxy:
-        try:
-            ip, port = proxy.split(":")
-            port = int(port)
-            if proxy_user and proxy_pass:
-                socks.set_default_proxy(socks.SOCKS5, ip, port, True, proxy_user, proxy_pass)
-            else:
-                socks.set_default_proxy(socks.SOCKS5, ip, port)
-            socket.socket = socks.socksocket
-        except Exception as e:
-            print("❌ Proxy setup error:", e)
-
-    for mx in sorted(mx_records, key=lambda r: r.preference):
-        try:
-            server = smtplib.SMTP(timeout=10)
-            server.connect(str(mx.exchange))
-            server.helo('test.com')
-            server.mail('verify@test.com')
-            code, _ = server.rcpt(email)
-            server.quit()
-            socket.socket = original_socket
-
-            if code == 250:
-                return 'Valid'
-            elif code in (451, 452, 550, 551, 552, 553):
-                return 'Invalid'
-        except Exception as e:
-            print("SMTP error:", e)
-            continue
-
-    socket.socket = original_socket
-    return 'Unknown'
-
-def fallback_api_check(email):
-    try:
-        r = requests.get(f'https://api.kickbox.com/v2/verify?email={email}&apikey={KICKBOX_KEY}').json()
-        if r.get("result") == "deliverable":
-            return "Valid (Kickbox)"
-        elif r.get("result") == "undeliverable":
-            return "Invalid (Kickbox)"
-    except: pass
-
-    try:
-        r = requests.get(f'https://verimail.io/api/v1/verify?email={email}&key={VERIMAIL_KEY}').json()
-        if r.get("deliverable") is True:
-            return "Valid (Verimail)"
-        elif r.get("deliverable") is False:
-            return "Invalid (Verimail)"
-    except: pass
-
-    try:
-        r = requests.get(f'http://apilayer.net/api/check?access_key={MAILBOXLAYER_KEY}&email={email}&smtp=1&format=1').json()
-        if r.get("smtp_check") and r.get("format_valid"):
-            return "Valid (MailboxLayer)"
-        else:
-            return "Invalid (MailboxLayer)"
-    except: pass
-
-    return "Fallback Failed"
-
-# ---------[ Email Verification Streaming ]---------
-@app.route('/verify', methods=['POST'])
-def verify_emails_stream():
-    file = request.files['file']
-    proxy = request.form.get('proxy')
-    proxy_user = request.form.get('proxyUser')
-    proxy_pass = request.form.get('proxyPass')
-
-    stream = io.StringIO(file.stream.read().decode("utf-8"), newline=None)
-    reader = csv.reader(stream)
-
-    def generate():
-        for row in reader:
-            email = row[0].strip()
-            if not is_valid_syntax(email):
-                status = 'Invalid Syntax'
-            else:
-                domain = email.split('@')[1]
-                mx_records = get_mx_records(domain)
-                if not mx_records:
-                    status = 'Invalid Domain'
-                else:
-                    status = smtp_check(email, mx_records, proxy, proxy_user, proxy_pass)
-                    if status == 'Unknown':
-                        status = fallback_api_check(email)
-
-            result = {'email': email, 'status': status}
-            yield f"data: {json.dumps(result)}\n\n"
-            time.sleep(0.2)
-
-    return Response(generate(), mimetype='text/event-stream')
-
-# ---------[ Test Proxy (with Authentication) ]---------
-@app.route('/test-proxy', methods=['POST'])
-def test_proxy():
-    data = request.get_json()
-    proxy = data.get("proxy")
-    proxy_user = data.get("proxyUser")
-    proxy_pass = data.get("proxyPass")
-
-    try:
-        if proxy:
-            ip, port = proxy.split(":")
-            port = int(port)
-            if proxy_user and proxy_pass:
-                socks.set_default_proxy(socks.SOCKS5, ip, port, True, proxy_user, proxy_pass)
-            else:
-                socks.set_default_proxy(socks.SOCKS5, ip, port)
-            socket.socket = socks.socksocket
-
-        test = smtplib.SMTP("smtp.gmail.com", 587, timeout=10)
-        test.quit()
-        socket.socket = socket._socketobject if hasattr(socket, "_socketobject") else socket.socket
-        return jsonify({"status": "✅ Proxy works!"})
-    except Exception as e:
-        print("Proxy test error:", e)
-        socket.socket = socket._socketobject if hasattr(socket, "_socketobject") else socket.socket
-        return jsonify({"status": "Proxy connection failed"}), 400
-
-# ---------[ Basic Check ]---------
 @app.route('/')
 def home():
-    return '✅ Email Verifier API with Auth-Proxies + Fallback APIs is Running!'
+    return '✅ Railway Load Balancer Backend is Running!'
+
+@app.route('/verify', methods=['POST'])
+def verify():
+    backend = random.choice(BACKENDS)
+    try:
+        files = {'file': request.files['file']}
+        data = {
+            'proxy': request.form.get('proxy', ''),
+            'proxyUser': request.form.get('proxyUser', ''),
+            'proxyPass': request.form.get('proxyPass', '')
+        }
+        resp = requests.post(f"{backend}/verify", files=files, data=data, stream=True)
+
+        def generate():
+            for chunk in resp.iter_content(chunk_size=None):
+                yield chunk
+
+        return Response(generate(), mimetype='text/event-stream')
+    except Exception as e:
+        print("❌ Proxying failed:", e)
+        return jsonify({'error': 'Proxying failed'}), 500
+
+@app.route('/test-proxy', methods=['POST'])
+def test_proxy():
+    backend = random.choice(BACKENDS)
+    try:
+        resp = requests.post(f"{backend}/test-proxy", json=request.get_json())
+        return jsonify(resp.json()), resp.status_code
+    except Exception as e:
+        print("❌ Proxy test failed:", e)
+        return jsonify({'status': 'Proxy test failed'}), 500
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
+    
